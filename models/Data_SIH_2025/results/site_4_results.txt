@@ -1,7 +1,7 @@
 ======================================================================
 SIH PS-10 - Training and Evaluation Results
 Site: 4
-Date: 2025-11-16 22:01:15
+Date: 2025-11-25 14:54:18
 ======================================================================
 
 
@@ -32,16 +32,22 @@ O3 TARGET EVALUATION
 
 TRAIN SET:
   RMSE: 5.9702
+  MAE:  4.1453
+  Bias: -0.0013
   R²:   0.9738
   RIA:  0.9932
 
 TEST SET:
   RMSE: 8.9243
+  MAE:  5.7132
+  Bias: -0.6448
   R²:   0.9341
   RIA:  0.9821
 
 BASELINE (O3_forecast) on TEST SET:
   RMSE: 42.9010
+  MAE:  30.5622
+  Bias: -16.9334
   R²:   -0.5238
   RIA:  0.4129
 
@@ -53,16 +59,22 @@ NO2 TARGET EVALUATION
 
 TRAIN SET:
   RMSE: 6.1271
+  MAE:  4.3722
+  Bias: -0.0008
   R²:   0.9360
   RIA:  0.9828
 
 TEST SET:
   RMSE: 7.3470
+  MAE:  4.7081
+  Bias: 0.4903
   R²:   0.8422
   RIA:  0.9552
 
 BASELINE (NO2_forecast) on TEST SET:
   RMSE: 69.7152
+  MAE:  57.6023
+  Bias: 53.7811
   R²:   -13.2040
   RIA:  0.2092
 

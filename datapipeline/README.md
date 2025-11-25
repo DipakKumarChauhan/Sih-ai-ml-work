@@ -154,7 +154,7 @@ The pipeline outputs JSON data with the following structure (now enriched with a
     "overall_aqi": 150,
     "measurement_time": "2024-01-15 10:00:00",
     "timezone": "+05:30",
-    "concentrations": {
+            "concentrations": {
       "no2": {
         "value": 45,
         "unit": "µg/m³",

@@ -252,7 +252,7 @@ class AirQualityPipeline:
         station_lng = station_geo[1] if isinstance(station_geo, list) and len(station_geo) > 1 else None
         
         available_features = _extract_available_feature_values(data)
-
+        
         # Extract additional metadata
         result = {
             "timestamp": datetime.now().isoformat(),
@@ -515,7 +515,7 @@ def main():
         if not delhi_sites:
             print("No site coordinates available. Aborting.")
             return
-
+        
         print("=" * 70)
         print("FETCHING AIR QUALITY DATA FOR ALL DELHI SITES")
         print("=" * 70)

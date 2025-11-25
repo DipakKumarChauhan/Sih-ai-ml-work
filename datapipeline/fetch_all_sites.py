@@ -93,7 +93,7 @@ def main():
     
     print(f"\n✓ Data saved to {args.output}")
     print("\nYou can also run: python air_quality_pipeline.py --multiple")
-    
+
 if __name__ == "__main__":
     main()
 
