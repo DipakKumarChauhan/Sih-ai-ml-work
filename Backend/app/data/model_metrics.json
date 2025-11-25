@@ -1,0 +1,152 @@
+{
+    "generated_at": "2025-11-25T15:00:00+05:30",
+    "sites": [
+        {
+            "site_id": 1,
+            "o3": {
+                "rmse": 6.3211,
+                "mae": 2.9908,
+                "bias": -0.1995,
+                "r2": 0.9369,
+                "ria": 0.9823,
+                "baseline_rmse": 32.3062,
+                "rmse_reduction_pct": 80.43
+            },
+            "no2": {
+                "rmse": 9.6508,
+                "mae": 5.4306,
+                "bias": -0.6086,
+                "r2": 0.8585,
+                "ria": 0.9587,
+                "baseline_rmse": 66.1251,
+                "rmse_reduction_pct": 85.41
+            }
+        },
+        {
+            "site_id": 2,
+            "o3": {
+                "rmse": 7.4183,
+                "mae": 4.5652,
+                "bias": -0.2379,
+                "r2": 0.9212,
+                "ria": 0.9788,
+                "baseline_rmse": 35.769,
+                "rmse_reduction_pct": 79.26
+            },
+            "no2": {
+                "rmse": 7.6619,
+                "mae": 5.0942,
+                "bias": 0.0923,
+                "r2": 0.8691,
+                "ria": 0.9623,
+                "baseline_rmse": 50.6373,
+                "rmse_reduction_pct": 84.87
+            }
+        },
+        {
+            "site_id": 3,
+            "o3": {
+                "rmse": 11.2799,
+                "mae": 7.1061,
+                "bias": 0.7422,
+                "r2": 0.9055,
+                "ria": 0.9747,
+                "baseline_rmse": 43.5325,
+                "rmse_reduction_pct": 74.09
+            },
+            "no2": {
+                "rmse": 9.8221,
+                "mae": 6.5102,
+                "bias": 0.8772,
+                "r2": 0.8752,
+                "ria": 0.965,
+                "baseline_rmse": 69.5256,
+                "rmse_reduction_pct": 85.87
+            }
+        },
+        {
+            "site_id": 4,
+            "o3": {
+                "rmse": 8.9243,
+                "mae": 5.7132,
+                "bias": -0.6448,
+                "r2": 0.9341,
+                "ria": 0.9821,
+                "baseline_rmse": 42.901,
+                "rmse_reduction_pct": 79.2
+            },
+            "no2": {
+                "rmse": 7.347,
+                "mae": 4.7081,
+                "bias": 0.4903,
+                "r2": 0.8422,
+                "ria": 0.9552,
+                "baseline_rmse": 69.7152,
+                "rmse_reduction_pct": 89.46
+            }
+        },
+        {
+            "site_id": 5,
+            "o3": {
+                "rmse": 8.9272,
+                "mae": 5.8598,
+                "bias": -0.0882,
+                "r2": 0.9302,
+                "ria": 0.9811,
+                "baseline_rmse": 42.0149,
+                "rmse_reduction_pct": 78.75
+            },
+            "no2": {
+                "rmse": 13.3785,
+                "mae": 8.1812,
+                "bias": -0.869,
+                "r2": 0.8849,
+                "ria": 0.9672,
+                "baseline_rmse": 63.5366,
+                "rmse_reduction_pct": 78.94
+            }
+        },
+        {
+            "site_id": 6,
+            "o3": {
+                "rmse": 14.8686,
+                "mae": 7.9204,
+                "bias": -2.3125,
+                "r2": 0.8131,
+                "ria": 0.9372,
+                "baseline_rmse": 41.8497,
+                "rmse_reduction_pct": 64.47
+            },
+            "no2": {
+                "rmse": 10.4464,
+                "mae": 5.9213,
+                "bias": -0.6344,
+                "r2": 0.7719,
+                "ria": 0.9285,
+                "baseline_rmse": 56.9675,
+                "rmse_reduction_pct": 81.66
+            }
+        },
+        {
+            "site_id": 7,
+            "o3": {
+                "rmse": 9.0431,
+                "mae": 5.8954,
+                "bias": 0.2926,
+                "r2": 0.9255,
+                "ria": 0.9796,
+                "baseline_rmse": 39.6455,
+                "rmse_reduction_pct": 77.19
+            },
+            "no2": {
+                "rmse": 7.3742,
+                "mae": 4.5561,
+                "bias": 0.2804,
+                "r2": 0.8518,
+                "ria": 0.9558,
+                "baseline_rmse": 67.0204,
+                "rmse_reduction_pct": 89
+            }
+        }
+    ]
+}

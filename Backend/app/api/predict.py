@@ -6,6 +6,8 @@ from fastapi import APIRouter, HTTPException, status
 from typing import Optional
 import pandas as pd
 import logging
+import json
+from pathlib import Path
 
 from app.schemas.predict_request import PredictRequest
 from app.schemas.predict_response import PredictResponse, ErrorResponse, LiveSourceMetadata
@@ -19,6 +21,40 @@ router = APIRouter(prefix="/api/v1/predict", tags=["predictions"])
 # Initialize services (paths resolved relative to backend root)
 prediction_service = PredictionService(models_dir="Data_SIH_2025/models")
 live_data_service = LiveDataService(lat_lon_path="Data_SIH_2025/lat_lon_sites.txt")
+METRICS_FILE = Path(__file__).resolve().parent.parent / "data" / "model_metrics.json"
+_cached_metrics: Optional[dict] = None
+
+
+def _load_model_metrics() -> Optional[dict]:
+    global _cached_metrics
+    if _cached_metrics is not None:
+        return _cached_metrics
+    if not METRICS_FILE.exists():
+        logger.error("Model metrics file not found: %s", METRICS_FILE)
+        return None
+    try:
+        with open(METRICS_FILE, "r", encoding="utf-8") as handle:
+            _cached_metrics = json.load(handle)
+            return _cached_metrics
+    except json.JSONDecodeError as exc:
+        logger.error("Failed to parse model metrics JSON: %s", exc)
+        return None
+
+
+@router.get(
+    "/metrics",
+    status_code=status.HTTP_200_OK,
+    summary="Get model evaluation metrics",
+    description="Return RMSE/R²/RIA metrics for each trained site model"
+)
+async def get_model_metrics():
+    data = _load_model_metrics()
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Model metrics are unavailable. Please regenerate them."
+        )
+    return data
 
 
 @router.get(
