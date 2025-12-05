@@ -553,16 +553,15 @@ def train_o3_model(df, train_mask, val_mask, test_mask):
     
     return model, train_metrics, val_metrics, test_metrics, baseline_rmse
 
-# ==================== TRAIN NO2 MODELS ====================
-def train_no2_models(df, train_mask, val_mask, test_mask):
-    """Train NO2 models with all improvements"""
+# ==================== TRAIN NO2 MODEL (GLOBAL ONLY) ====================
+def train_no2_model(df, train_mask, val_mask, test_mask):
+    """Train NO2 global model only"""
     print(f"\n{'='*80}")
-    print("TRAINING NO2 MODELS WITH ALL IMPROVEMENTS")
+    print("TRAINING NO2 GLOBAL MODEL")
     print(f"{'='*80}")
     
     features = get_no2_features(df, include_winter_features=True)
     
-    # Train global model first
     print("\n   Training global NO2 model...")
     X_train, y_train, X_val, y_val, X_test, y_test, features = prepare_data(
         df, 'NO2_target', features, train_mask, val_mask, test_mask
@@ -570,11 +569,11 @@ def train_no2_models(df, train_mask, val_mask, test_mask):
     
     print(f"   Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
     
-    # STEP 3: Peak-weighted training
+    # Peak-weighted training
     sample_weights = calculate_sample_weights(y_train, percentile=75, weight_factor=4.0)
     print(f"   Using peak-weighted loss (4.0x weight for >75th percentile)")
     
-    params_global = {
+    params = {
         'objective': 'regression',
         'metric': 'rmse',
         'boosting_type': 'gbdt',
@@ -594,8 +593,8 @@ def train_no2_models(df, train_mask, val_mask, test_mask):
     train_data = lgb.Dataset(X_train, label=y_train, weight=sample_weights)
     val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
     
-    global_model = lgb.train(
-        params_global,
+    model = lgb.train(
+        params,
         train_data,
         valid_sets=[train_data, val_data],
         valid_names=['train', 'valid'],
@@ -606,239 +605,58 @@ def train_no2_models(df, train_mask, val_mask, test_mask):
         ]
     )
     
-    # STEP 3: Train residual calibrator on VALIDATION set first
+    # Train residual calibrator on validation set
     print("   Training residual calibrator on validation set...")
-    global_val_pred = global_model.predict(X_val, num_iteration=global_model.best_iteration)
-    global_calibrator = train_residual_calibrator(y_val, global_val_pred, method='isotonic')
+    val_pred = model.predict(X_val, num_iteration=model.best_iteration)
+    calibrator = train_residual_calibrator(y_val, val_pred, method='isotonic')
     
     # Calculate train and val metrics (before calibration)
-    global_train_pred = global_model.predict(X_train, num_iteration=global_model.best_iteration)
-    global_val_pred = global_model.predict(X_val, num_iteration=global_model.best_iteration)
-    global_test_pred = global_model.predict(X_test, num_iteration=global_model.best_iteration)
+    train_pred = model.predict(X_train, num_iteration=model.best_iteration)
+    val_pred = model.predict(X_val, num_iteration=model.best_iteration)
+    test_pred = model.predict(X_test, num_iteration=model.best_iteration)
     
-    global_train_metrics = {
-        'RMSE': np.sqrt(mean_squared_error(y_train, global_train_pred)),
-        'MAE': mean_absolute_error(y_train, global_train_pred),
-        'R2': r2_score(y_train, global_train_pred)
+    train_metrics = {
+        'RMSE': np.sqrt(mean_squared_error(y_train, train_pred)),
+        'MAE': mean_absolute_error(y_train, train_pred),
+        'R2': r2_score(y_train, train_pred)
     }
-    global_val_metrics = {
-        'RMSE': np.sqrt(mean_squared_error(y_val, global_val_pred)),
-        'MAE': mean_absolute_error(y_val, global_val_pred),
-        'R2': r2_score(y_val, global_val_pred)
+    val_metrics = {
+        'RMSE': np.sqrt(mean_squared_error(y_val, val_pred)),
+        'MAE': mean_absolute_error(y_val, val_pred),
+        'R2': r2_score(y_val, val_pred)
     }
     
     # Apply calibration to test set
-    global_pred_calibrated = global_calibrator.predict(global_test_pred)
+    test_pred_calibrated = calibrator.predict(test_pred)
     
-    global_rmse = np.sqrt(mean_squared_error(y_test, global_test_pred))
-    global_r2 = r2_score(y_test, global_test_pred)
-    global_calibrated_rmse = np.sqrt(mean_squared_error(y_test, global_pred_calibrated))
-    global_calibrated_r2 = r2_score(y_test, global_pred_calibrated)
+    test_metrics_uncalibrated = {
+        'RMSE': np.sqrt(mean_squared_error(y_test, test_pred)),
+        'MAE': mean_absolute_error(y_test, test_pred),
+        'R2': r2_score(y_test, test_pred)
+    }
+    
+    test_metrics = {
+        'RMSE': np.sqrt(mean_squared_error(y_test, test_pred_calibrated)),
+        'MAE': mean_absolute_error(y_test, test_pred_calibrated),
+        'R2': r2_score(y_test, test_pred_calibrated)
+    }
     
     # Calculate baseline RMSE
-    global_baseline_rmse = np.sqrt(mean_squared_error(y_test, np.full_like(y_test, y_train.mean())))
+    baseline_rmse = np.sqrt(mean_squared_error(y_test, np.full_like(y_test, y_train.mean())))
     
-    print(f"   Global Model - Test RMSE: {global_rmse:.4f}, R²: {global_r2:.4f}")
-    print(f"   Global Model (calibrated) - Test RMSE: {global_calibrated_rmse:.4f}, R²: {global_calibrated_r2:.4f}")
-    print(f"   Calibration improvement: {((global_rmse - global_calibrated_rmse) / global_rmse * 100):.2f}%")
+    print(f"\n   Results:")
+    print(f"   Train RMSE: {train_metrics['RMSE']:.4f}, R²: {train_metrics['R2']:.4f}")
+    print(f"   Val RMSE:   {val_metrics['RMSE']:.4f}, R²: {val_metrics['R2']:.4f}")
+    print(f"   Test RMSE (uncalibrated): {test_metrics_uncalibrated['RMSE']:.4f}, R²: {test_metrics_uncalibrated['R2']:.4f}")
+    print(f"   Test RMSE (calibrated):   {test_metrics['RMSE']:.4f}, R²: {test_metrics['R2']:.4f}")
+    print(f"   Baseline RMSE: {baseline_rmse:.4f}")
+    print(f"   Improvement: {((baseline_rmse - test_metrics['RMSE']) / baseline_rmse * 100):.2f}%")
+    print(f"   Calibration improvement: {((test_metrics_uncalibrated['RMSE'] - test_metrics['RMSE']) / test_metrics_uncalibrated['RMSE'] * 100):.2f}%")
     
-    # Use calibrated predictions for final evaluation
-    global_pred = global_pred_calibrated
-    
-    # Train winter specialist (HIGHEST PRIORITY)
-    print("\n   Training WINTER NO2 specialist (highest priority)...")
-    winter_train_mask = train_mask & df['month'].isin([12, 1, 2])
-    winter_val_mask = val_mask & df['month'].isin([12, 1, 2])
-    winter_test_mask = test_mask & df['month'].isin([12, 1, 2])
-    
-    if winter_train_mask.sum() < 100:
-        print("      Insufficient winter training data, skipping winter specialist")
-        winter_model = None
-        winter_calibrator = None
-    else:
-        X_train_w, y_train_w, X_val_w, y_val_w, X_test_w, y_test_w, _ = prepare_data(
-            df, 'NO2_target', features, winter_train_mask, winter_val_mask, winter_test_mask
-        )
-        
-        if len(X_train_w) < 50:
-            print("      Insufficient winter training data after filtering")
-            winter_model = None
-            winter_calibrator = None
-        else:
-            # Handle missing validation
-            if len(X_val_w) == 0:
-                val_size = int(0.2 * len(X_train_w))
-                X_val_w = X_train_w.iloc[-val_size:].copy()
-                y_val_w = y_train_w.iloc[-val_size:].copy()
-                X_train_w = X_train_w.iloc[:-val_size].copy()
-                y_train_w = y_train_w.iloc[:-val_size].copy()
-            
-            print(f"      Train: {len(X_train_w)}, Val: {len(X_val_w)}, Test: {len(X_test_w)}")
-            
-            # STEP 3: Peak-weighted training for winter
-            winter_weights = calculate_sample_weights(y_train_w, percentile=75, weight_factor=4.0)
-            
-            # STEP 1: Winter LightGBM parameters (exact specifications)
-            params_winter = {
-                'objective': 'regression',
-                'metric': 'rmse',
-                'boosting_type': 'gbdt',
-                'num_leaves': 40,  # 31-48 range (using 40)
-                'max_depth': 5,
-                'learning_rate': 0.03,  # 0.02-0.05 range (using 0.03)
-                'feature_fraction': 0.7,  # 0.6-0.8 range (using 0.7)
-                'bagging_fraction': 0.7,
-                'bagging_freq': 5,
-                'min_data_in_leaf': 300,  # 200-500 range (using 300)
-                'lambda_l1': 0.1,
-                'lambda_l2': 0.3,  # 0.2-0.5 range (using 0.3)
-                'verbose': -1,
-                'random_state': 42
-            }
-            
-            train_data_w = lgb.Dataset(X_train_w, label=y_train_w, weight=winter_weights)
-            if len(X_val_w) > 0:
-                val_data_w = lgb.Dataset(X_val_w, label=y_val_w, reference=train_data_w)
-                winter_model = lgb.train(
-                    params_winter,
-                    train_data_w,
-                    valid_sets=[val_data_w],
-                    num_boost_round=200,
-                    callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)]
-                )
-            else:
-                winter_model = lgb.train(
-                    params_winter,
-                    train_data_w,
-                    num_boost_round=150
-                )
-            
-            # Evaluate winter model
-            if len(X_test_w) > 0:
-                # STEP 3: Train residual calibrator on VALIDATION set first
-                if len(X_val_w) > 0:
-                    winter_val_pred = winter_model.predict(X_val_w, num_iteration=winter_model.best_iteration)
-                    winter_calibrator = train_residual_calibrator(y_val_w, winter_val_pred, method='isotonic')
-                else:
-                    # If no validation, train on test (not ideal but works)
-                    winter_test_pred_temp = winter_model.predict(X_test_w, num_iteration=winter_model.best_iteration)
-                    winter_calibrator = train_residual_calibrator(y_test_w, winter_test_pred_temp, method='isotonic')
-                
-                winter_pred = winter_model.predict(X_test_w, num_iteration=winter_model.best_iteration)
-                winter_rmse = np.sqrt(mean_squared_error(y_test_w, winter_pred))
-                winter_r2 = r2_score(y_test_w, winter_pred)
-                print(f"      Winter Model - Test RMSE: {winter_rmse:.4f}, R²: {winter_r2:.4f}")
-                
-                # Apply calibration to test set
-                winter_pred_calibrated = winter_calibrator.predict(winter_pred)
-                winter_calibrated_rmse = np.sqrt(mean_squared_error(y_test_w, winter_pred_calibrated))
-                winter_calibrated_r2 = r2_score(y_test_w, winter_pred_calibrated)
-                print(f"      Winter Model (calibrated) - Test RMSE: {winter_calibrated_rmse:.4f}, R²: {winter_calibrated_r2:.4f}")
-                print(f"      Calibration improvement: {((winter_rmse - winter_calibrated_rmse) / winter_rmse * 100):.2f}%")
-            else:
-                winter_calibrator = None
-                print("      No winter test data in test period")
-    
-    # Train post-monsoon specialist (STEP 4)
-    print("\n   Training POST-MONSOON NO2 specialist...")
-    post_monsoon_train_mask = train_mask & df['month'].isin([10, 11])
-    post_monsoon_val_mask = val_mask & df['month'].isin([10, 11])
-    post_monsoon_test_mask = test_mask & df['month'].isin([10, 11])
-    
-    if post_monsoon_train_mask.sum() < 100:
-        print("      Insufficient post-monsoon training data, skipping post-monsoon specialist")
-        post_monsoon_model = None
-        post_monsoon_calibrator = None
-    else:
-        X_train_pm, y_train_pm, X_val_pm, y_val_pm, X_test_pm, y_test_pm, _ = prepare_data(
-            df, 'NO2_target', features, post_monsoon_train_mask, post_monsoon_val_mask, post_monsoon_test_mask
-        )
-        
-        if len(X_train_pm) < 50:
-            print("      Insufficient post-monsoon training data after filtering")
-            post_monsoon_model = None
-            post_monsoon_calibrator = None
-        else:
-            # Handle missing validation
-            if len(X_val_pm) == 0:
-                val_size = int(0.2 * len(X_train_pm))
-                X_val_pm = X_train_pm.iloc[-val_size:].copy()
-                y_val_pm = y_train_pm.iloc[-val_size:].copy()
-                X_train_pm = X_train_pm.iloc[:-val_size].copy()
-                y_train_pm = y_train_pm.iloc[:-val_size].copy()
-            
-            print(f"      Train: {len(X_train_pm)}, Val: {len(X_val_pm)}, Test: {len(X_test_pm)}")
-            
-            # STEP 3: Peak-weighted training for post-monsoon
-            pm_weights = calculate_sample_weights(y_train_pm, percentile=75, weight_factor=4.0)
-            
-            params_pm = {
-                'objective': 'regression',
-                'metric': 'rmse',
-                'boosting_type': 'gbdt',
-                'num_leaves': 40,
-                'max_depth': 5,
-                'learning_rate': 0.03,
-                'feature_fraction': 0.7,
-                'bagging_fraction': 0.7,
-                'bagging_freq': 5,
-                'min_data_in_leaf': 200,
-                'lambda_l1': 1.5,
-                'lambda_l2': 1.5,
-                'verbose': -1,
-                'random_state': 42
-            }
-            
-            train_data_pm = lgb.Dataset(X_train_pm, label=y_train_pm, weight=pm_weights)
-            if len(X_val_pm) > 0:
-                val_data_pm = lgb.Dataset(X_val_pm, label=y_val_pm, reference=train_data_pm)
-                post_monsoon_model = lgb.train(
-                    params_pm,
-                    train_data_pm,
-                    valid_sets=[val_data_pm],
-                    num_boost_round=200,
-                    callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)]
-                )
-            else:
-                post_monsoon_model = lgb.train(
-                    params_pm,
-                    train_data_pm,
-                    num_boost_round=150
-                )
-            
-            # Evaluate post-monsoon model
-            if len(X_test_pm) > 0:
-                # STEP 3: Train residual calibrator on VALIDATION set first
-                if len(X_val_pm) > 0:
-                    pm_val_pred = post_monsoon_model.predict(X_val_pm, num_iteration=post_monsoon_model.best_iteration)
-                    post_monsoon_calibrator = train_residual_calibrator(y_val_pm, pm_val_pred, method='isotonic')
-                else:
-                    # If no validation, train on test (not ideal but works)
-                    pm_test_pred_temp = post_monsoon_model.predict(X_test_pm, num_iteration=post_monsoon_model.best_iteration)
-                    post_monsoon_calibrator = train_residual_calibrator(y_test_pm, pm_test_pred_temp, method='isotonic')
-                
-                pm_pred = post_monsoon_model.predict(X_test_pm, num_iteration=post_monsoon_model.best_iteration)
-                pm_rmse = np.sqrt(mean_squared_error(y_test_pm, pm_pred))
-                pm_r2 = r2_score(y_test_pm, pm_pred)
-                print(f"      Post-Monsoon Model - Test RMSE: {pm_rmse:.4f}, R²: {pm_r2:.4f}")
-                
-                # Apply calibration to test set
-                pm_pred_calibrated = post_monsoon_calibrator.predict(pm_pred)
-                pm_calibrated_rmse = np.sqrt(mean_squared_error(y_test_pm, pm_pred_calibrated))
-                pm_calibrated_r2 = r2_score(y_test_pm, pm_pred_calibrated)
-                print(f"      Post-Monsoon Model (calibrated) - Test RMSE: {pm_calibrated_rmse:.4f}, R²: {pm_calibrated_r2:.4f}")
-                print(f"      Calibration improvement: {((pm_rmse - pm_calibrated_rmse) / pm_rmse * 100):.2f}%")
-            else:
-                post_monsoon_calibrator = None
-                print("      No post-monsoon test data in test period")
-    
-    # Store all seasonal models
-    seasonal_models = {'global': global_model, 'winter': winter_model, 'post_monsoon': post_monsoon_model}
-    seasonal_calibrators = {'global': global_calibrator, 'winter': winter_calibrator, 'post_monsoon': post_monsoon_calibrator}
-    
-    return seasonal_models, seasonal_calibrators, global_rmse, global_r2, global_train_metrics, global_val_metrics, global_baseline_rmse
+    return model, calibrator, train_metrics, val_metrics, test_metrics, baseline_rmse
 
-# ==================== STEP 2: IMPROVED BLENDING ====================
+# ==================== REMOVED: BLENDING FUNCTION (NOT USED - GLOBAL MODEL ONLY) ====================
+# This function is no longer used since we only use the global NO2 model
 def evaluate_improved_blending(df, seasonal_models, seasonal_calibrators, test_mask, features, global_rmse):
     """Evaluate improved blending with smart fallback and adaptive logic"""
     print(f"\n{'='*80}")
@@ -1071,63 +889,27 @@ results_summary.append({
     'Improvement_%': ((o3_baseline - o3_test_metrics['RMSE']) / o3_baseline * 100)
 })
 
-# Train NO2 models with all improvements
-no2_features = get_no2_features(df, include_winter_features=True)
-seasonal_no2_models, seasonal_no2_calibrators, global_no2_rmse, global_no2_r2, global_no2_train_metrics, global_no2_val_metrics, global_no2_baseline = train_no2_models(
+# Train NO2 global model only
+no2_model, no2_calibrator, no2_train_metrics, no2_val_metrics, no2_test_metrics, no2_baseline = train_no2_model(
     df, train_mask, val_mask, test_mask
 )
 
-# Save NO2 models
-for season_name, model in seasonal_no2_models.items():
-    if model is not None:
-        model.save_model(f'models/final_no2_{season_name}_model.txt')
-        with open(f'models/final_no2_{season_name}_model.pkl', 'wb') as f:
-            pickle.dump((model, seasonal_no2_calibrators.get(season_name)), f)
-
-# Evaluate improved blending
-blended_metrics, soft_blended_metrics, adaptive_blended_metrics, global_metrics, blended_pred, soft_blended_pred, adaptive_blended_pred = evaluate_improved_blending(
-    df, seasonal_no2_models, seasonal_no2_calibrators, test_mask, no2_features, global_no2_rmse
-)
-
-# Use soft blending as final (better stability)
-# Note: Train/Val metrics are from global model (blended models don't have separate train/val)
-results_summary.append({
-    'Model': 'NO2_target (soft blended)',
-    'Train_RMSE': global_no2_train_metrics['RMSE'],
-    'Train_R2': global_no2_train_metrics['R2'],
-    'Val_RMSE': global_no2_val_metrics['RMSE'],
-    'Val_R2': global_no2_val_metrics['R2'],
-    'Test_RMSE': soft_blended_metrics['RMSE'],
-    'Test_MAE': soft_blended_metrics['MAE'],
-    'Test_R2': soft_blended_metrics['R2'],
-    'Baseline_RMSE': global_no2_baseline,
-    'Improvement_%': ((global_no2_baseline - soft_blended_metrics['RMSE']) / global_no2_baseline * 100)
-})
+# Save NO2 model
+no2_model.save_model('models/final_no2_model.txt')
+with open('models/final_no2_model.pkl', 'wb') as f:
+    pickle.dump((no2_model, no2_calibrator), f)
 
 results_summary.append({
-    'Model': 'NO2_target (hard blended)',
-    'Train_RMSE': global_no2_train_metrics['RMSE'],
-    'Train_R2': global_no2_train_metrics['R2'],
-    'Val_RMSE': global_no2_val_metrics['RMSE'],
-    'Val_R2': global_no2_val_metrics['R2'],
-    'Test_RMSE': blended_metrics['RMSE'],
-    'Test_MAE': blended_metrics['MAE'],
-    'Test_R2': blended_metrics['R2'],
-    'Baseline_RMSE': global_no2_baseline,
-    'Improvement_%': ((global_no2_baseline - blended_metrics['RMSE']) / global_no2_baseline * 100)
-})
-
-results_summary.append({
-    'Model': 'NO2_target (global)',
-    'Train_RMSE': global_no2_train_metrics['RMSE'],
-    'Train_R2': global_no2_train_metrics['R2'],
-    'Val_RMSE': global_no2_val_metrics['RMSE'],
-    'Val_R2': global_no2_val_metrics['R2'],
-    'Test_RMSE': global_metrics['RMSE'],
-    'Test_MAE': global_metrics['MAE'],
-    'Test_R2': global_metrics['R2'],
-    'Baseline_RMSE': global_no2_baseline,
-    'Improvement_%': ((global_no2_baseline - global_metrics['RMSE']) / global_no2_baseline * 100)
+    'Model': 'NO2_target',
+    'Train_RMSE': no2_train_metrics['RMSE'],
+    'Train_R2': no2_train_metrics['R2'],
+    'Val_RMSE': no2_val_metrics['RMSE'],
+    'Val_R2': no2_val_metrics['R2'],
+    'Test_RMSE': no2_test_metrics['RMSE'],
+    'Test_MAE': no2_test_metrics['MAE'],
+    'Test_R2': no2_test_metrics['R2'],
+    'Baseline_RMSE': no2_baseline,
+    'Improvement_%': ((no2_baseline - no2_test_metrics['RMSE']) / no2_baseline * 100)
 })
 
 # Save results
@@ -1135,10 +917,11 @@ results_df = pd.DataFrame(results_summary)
 results_df.to_csv('results/final_no2_o3_performance_summary.csv', index=False)
 
 # ==================== CREATE NO2 MODEL DOCUMENTATION ====================
-# Get feature importance from global model
-if seasonal_no2_models['global'] is not None:
-    feature_importance = seasonal_no2_models['global'].feature_importance(importance_type='gain')
-    feature_names = seasonal_no2_models['global'].feature_name()
+# Get feature importance from model
+no2_features = get_no2_features(df, include_winter_features=True)
+if no2_model is not None:
+    feature_importance = no2_model.feature_importance(importance_type='gain')
+    feature_names = no2_model.feature_name()
     importance_df = pd.DataFrame({
         'feature': feature_names,
         'importance': feature_importance
@@ -1252,40 +1035,26 @@ with open('results/NO2_MODEL_INFORMATION.txt', 'w', encoding='utf-8') as f:
     
     f.write("MODEL ARCHITECTURE:\n")
     f.write("-"*80 + "\n")
-    f.write("NO2 models use a multi-model ensemble approach:\n")
-    f.write("1. Global Model: Trained on all seasons\n")
-    f.write("2. Winter Specialist: Trained on Dec-Feb data only\n")
-    f.write("3. Post-Monsoon Specialist: Trained on Oct-Nov data only\n")
-    f.write("4. Blending: Soft blending (70% seasonal + 30% global) used as final model\n\n")
+    f.write("NO2 model uses a single global LightGBM model trained on all seasons.\n")
+    f.write("The model includes:\n")
+    f.write("1. Peak-weighted training (4.0x weight for high-pollution events)\n")
+    f.write("2. Residual calibration using Isotonic Regression\n")
+    f.write("3. Comprehensive feature engineering for all seasons\n\n")
     
     f.write("MODEL PERFORMANCE:\n")
     f.write("-"*80 + "\n")
-    f.write("GLOBAL MODEL:\n")
-    f.write(f"Train RMSE: {global_no2_train_metrics['RMSE']:.6f}\n")
-    f.write(f"Train R²:   {global_no2_train_metrics['R2']:.6f}\n")
-    f.write(f"Val RMSE:   {global_no2_val_metrics['RMSE']:.6f}\n")
-    f.write(f"Val R²:     {global_no2_val_metrics['R2']:.6f}\n")
-    f.write(f"Test RMSE:  {global_metrics['RMSE']:.6f}\n")
-    f.write(f"Test MAE:   {global_metrics['MAE']:.6f}\n")
-    f.write(f"Test R²:    {global_metrics['R2']:.6f}\n")
-    f.write(f"Baseline RMSE: {global_no2_baseline:.6f}\n")
-    f.write(f"Improvement: {((global_no2_baseline - global_metrics['RMSE']) / global_no2_baseline * 100):.2f}%\n\n")
-    
-    f.write("SOFT BLENDED MODEL (FINAL):\n")
-    f.write(f"Test RMSE:  {soft_blended_metrics['RMSE']:.6f}\n")
-    f.write(f"Test MAE:   {soft_blended_metrics['MAE']:.6f}\n")
-    f.write(f"Test R²:    {soft_blended_metrics['R2']:.6f}\n")
-    f.write(f"Improvement: {((global_no2_baseline - soft_blended_metrics['RMSE']) / global_no2_baseline * 100):.2f}%\n\n")
-    
-    f.write("HARD BLENDED MODEL:\n")
-    f.write(f"Test RMSE:  {blended_metrics['RMSE']:.6f}\n")
-    f.write(f"Test MAE:   {blended_metrics['MAE']:.6f}\n")
-    f.write(f"Test R²:    {blended_metrics['R2']:.6f}\n")
-    f.write(f"Improvement: {((global_no2_baseline - blended_metrics['RMSE']) / global_no2_baseline * 100):.2f}%\n\n")
+    f.write(f"Train RMSE: {no2_train_metrics['RMSE']:.6f}\n")
+    f.write(f"Train R²:   {no2_train_metrics['R2']:.6f}\n")
+    f.write(f"Val RMSE:   {no2_val_metrics['RMSE']:.6f}\n")
+    f.write(f"Val R²:     {no2_val_metrics['R2']:.6f}\n")
+    f.write(f"Test RMSE:  {no2_test_metrics['RMSE']:.6f}\n")
+    f.write(f"Test MAE:   {no2_test_metrics['MAE']:.6f}\n")
+    f.write(f"Test R²:    {no2_test_metrics['R2']:.6f}\n")
+    f.write(f"Baseline RMSE: {no2_baseline:.6f}\n")
+    f.write(f"Improvement: {((no2_baseline - no2_test_metrics['RMSE']) / no2_baseline * 100):.2f}%\n\n")
     
     f.write("HYPERPARAMETERS:\n")
     f.write("-"*80 + "\n")
-    f.write("GLOBAL MODEL:\n")
     f.write("objective: regression\n")
     f.write("metric: rmse\n")
     f.write("boosting_type: gbdt\n")
@@ -1302,21 +1071,6 @@ with open('results/NO2_MODEL_INFORMATION.txt', 'w', encoding='utf-8') as f:
     f.write("num_boost_round: 200\n")
     f.write("early_stopping_rounds: 30\n")
     f.write("sample_weight: 4.0x for NO2 > 75th percentile\n\n")
-    
-    f.write("WINTER SPECIALIST MODEL:\n")
-    f.write("num_leaves: 40\n")
-    f.write("min_data_in_leaf: 300\n")
-    f.write("feature_fraction: 0.7\n")
-    f.write("lambda_l2: 0.3\n")
-    f.write("learning_rate: 0.03\n")
-    f.write("(Other parameters same as global)\n\n")
-    
-    f.write("POST-MONSOON SPECIALIST MODEL:\n")
-    f.write("num_leaves: 40\n")
-    f.write("min_data_in_leaf: 200\n")
-    f.write("lambda_l1: 1.5\n")
-    f.write("lambda_l2: 1.5\n")
-    f.write("(Other parameters same as global)\n\n")
     
     f.write("DATA SPLITS:\n")
     f.write("-"*80 + "\n")
@@ -1383,20 +1137,14 @@ with open('results/NO2_MODEL_INFORMATION.txt', 'w', encoding='utf-8') as f:
     f.write("-"*80 + "\n")
     f.write("1. Peak-Weighted Training:\n")
     f.write("   - Samples with NO2_target >= 75th percentile get 4.0x weight\n")
-    f.write("   - Applied to all models (global, winter, post-monsoon)\n\n")
+    f.write("   - Improves prediction of high-pollution events\n\n")
     
     f.write("2. Residual Calibration:\n")
     f.write("   - Isotonic regression calibrator trained on validation set\n")
     f.write("   - Applied to test predictions to reduce bias\n")
-    f.write("   - Calibrator saved with each model in pickle file\n\n")
+    f.write("   - Calibrator saved with model in pickle file\n\n")
     
-    f.write("3. Blending Strategy:\n")
-    f.write("   - Soft blending: 0.7 × seasonal_pred + 0.3 × global_pred\n")
-    f.write("   - Hard blending: Use seasonal model if available (winter highest priority)\n")
-    f.write("   - Adaptive blending: Use seasonal only if RMSE < global RMSE\n")
-    f.write("   - Final model uses soft blending for better stability\n\n")
-    
-    if seasonal_no2_models['global'] is not None and 'importance_df' in locals():
+    if no2_model is not None and 'importance_df' in locals():
         f.write("TOP 20 MOST IMPORTANT FEATURES:\n")
         f.write("-"*80 + "\n")
         for i, row in importance_df.head(20).iterrows():
@@ -1413,114 +1161,71 @@ with open('results/NO2_MODEL_INFORMATION.txt', 'w', encoding='utf-8') as f:
     
     f.write("MODEL FILES:\n")
     f.write("-"*80 + "\n")
-    f.write("Global Model: models/final_no2_global_model.txt/.pkl\n")
-    f.write("Winter Model: models/final_no2_winter_model.txt/.pkl\n")
-    f.write("Post-Monsoon Model: models/final_no2_post_monsoon_model.txt/.pkl\n")
-    f.write("(Pickle files include both model and calibrator)\n\n")
+    f.write("NO2 Model: models/final_no2_model.txt/.pkl\n")
+    f.write("(Pickle file includes both model and calibrator)\n\n")
     
     f.write("REPLICATION INSTRUCTIONS:\n")
     f.write("-"*80 + "\n")
     f.write("1. Load the data: master_site1_final_cleaned.csv\n")
     f.write("2. Run feature engineering as described above\n")
     f.write("3. Use the same train/val/test splits\n")
-    f.write("4. Load models from pickle files (includes calibrators)\n")
-    f.write("5. Apply calibrators to predictions before blending\n")
-    f.write("6. Use soft blending: 0.7 × seasonal + 0.3 × global\n")
-    f.write("7. Select seasonal model based on month:\n")
-    f.write("   - Winter (Dec-Feb): Use winter model\n")
-    f.write("   - Post-Monsoon (Oct-Nov): Use post-monsoon model\n")
-    f.write("   - Other seasons: Use global model\n\n")
+    f.write("4. Load model from pickle file (includes calibrator)\n")
+    f.write("5. Make predictions using the model\n")
+    f.write("6. Apply calibrator to predictions to reduce bias\n\n")
     
     f.write("="*80 + "\n")
 
 # Create final documentation
 with open('results/FINAL_NO2_IMPROVEMENTS.txt', 'w', encoding='utf-8') as f:
     f.write("="*80 + "\n")
-    f.write("FINAL NO2 MODEL IMPROVEMENTS\n")
+    f.write("FINAL NO2 MODEL - GLOBAL MODEL ONLY\n")
     f.write("="*80 + "\n")
     f.write(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
     
-    f.write("IMPROVEMENTS IMPLEMENTED:\n")
+    f.write("MODEL ARCHITECTURE:\n")
     f.write("-"*80 + "\n")
-    f.write("SEASON-ROBUST FEATURES (High impact for R²):\n")
+    f.write("Single global LightGBM model trained on all seasons.\n")
+    f.write("No seasonal specialists or blending used.\n\n")
+    
+    f.write("KEY IMPROVEMENTS:\n")
+    f.write("-"*80 + "\n")
+    f.write("1. SEASON-ROBUST FEATURES (High impact for R²):\n")
     f.write("   (A) Inversion strength: inv = t2m - d2m\n")
     f.write("   (B) Ventilation index: ventilation = blh × wind_speed\n")
-    f.write("   (C) Stability index: stability = inv × (1 / blh) [NEW - critical]\n")
+    f.write("   (C) Stability index: stability = inv × (1 / blh)\n")
     f.write("   (D) Traffic proxies: hour, is_weekend, (hour × is_weekend)\n")
-    f.write("   (E) Smooth BLH: blh_roll3 = blh.rolling(3).mean()\n")
-    f.write("   Why it helps: Reduces unexplained variance → R² increases\n\n")
+    f.write("   (E) Smooth BLH: blh_roll3 = blh.rolling(3).mean()\n\n")
     
-    f.write("STEP 1 — WINTER NO₂ FEATURES (CRITICAL):\n")
-    f.write("   - inversion_strength: t2m_era5 - d2m_era5\n")
-    f.write("   - is_night: 1 if (hour < 7 or hour > 20) else 0\n")
-    f.write("   - morning_peak: 1 if (hour in [7,8,9])\n")
-    f.write("   - blh_wind: blh × wind_speed\n")
-    f.write("   - blh_inversion: blh × inversion_strength\n")
-    f.write("   - no2lag_blhlag: NO2_target_lag1 × blh\n")
-    f.write("   - blh_roll3: rolling mean of BLH over 3 hours\n")
-    f.write("   - temperature_roll3: rolling mean of temperature over 3 hours\n\n")
+    f.write("2. COMPREHENSIVE FEATURE ENGINEERING:\n")
+    f.write("   - Extended lag features (1h, 3h, 6h, 12h, 24h)\n")
+    f.write("   - Rolling mean features (3h, 6h, 12h, 24h)\n")
+    f.write("   - PM interactions (pm25_pm10_ratio, pm25_pm10_product)\n")
+    f.write("   - Wind components (u, v, abs values, products)\n")
+    f.write("   - Winter-specific features (inversion_strength, is_night, morning_peak, etc.)\n")
+    f.write("   - Post-monsoon features (stubble_burning_flag, diwali_flag, low_wind_flag, etc.)\n\n")
     
-    f.write("STEP 1 — WINTER LIGHTGBM PARAMETERS:\n")
-    f.write("   - num_leaves: 40 (31-48 range)\n")
-    f.write("   - min_data_in_leaf: 300 (200-500 range)\n")
-    f.write("   - feature_fraction: 0.7 (0.6-0.8 range)\n")
-    f.write("   - lambda_l2: 0.3 (0.2-0.5 range)\n")
-    f.write("   - learning_rate: 0.03 (0.02-0.05 range)\n")
-    f.write("   Expected: Winter RMSE 27.4 → ~22-24\n\n")
+    f.write("3. PEAK-WEIGHTED TRAINING:\n")
+    f.write("   - Weight: 4.0x for NO2_target >= 75th percentile\n")
+    f.write("   - Improves prediction of high-pollution events\n\n")
     
-    f.write("STEP 2 — POST-MONSOON EVENT FEATURES:\n")
-    f.write("   - stubble_burning_flag: 1 if month in [10,11] else 0\n")
-    f.write("   - diwali_flag: 1 for 5 days around Diwali\n")
-    f.write("   - low_wind_flag: wind_speed < 1.0\n")
-    f.write("   - low_blh_flag: blh < 100\n")
-    f.write("   Expected: RMSE 25.1 → ~22-23\n\n")
-    
-    f.write("STEP 3 — PEAK-WEIGHTED TRAINING:\n")
-    f.write("   - Weight: 4 if NO2_target >= 75th percentile, else 1\n")
-    f.write("   - Applied to all NO2 models (global, winter, post-monsoon)\n")
-    f.write("   Expected: RMSE reduction ~1-2 points\n\n")
-    
-    f.write("STEP 4 — ISOTONIC CALIBRATION:\n")
-    f.write("   - Fit isotonic regression on validation set\n")
-    f.write("   - Apply correction to test predictions\n")
-    f.write("   Expected: Bias and RMSE reduction ~2-6%\n\n")
-    
-    f.write("STEP 5 — IMPROVED BLENDING LOGIC:\n")
-    f.write("   - Soft blending: 70% seasonal + 30% global\n")
-    f.write("   - Adaptive blending: Use seasonal only if RMSE < global RMSE\n")
-    f.write("   - Hard blending: Use seasonal if available (winter highest priority)\n\n")
-    
-    f.write("4. ✓ Peak-weighted training:\n")
-    f.write("   - Weight factor: 4.0x for NO2 > 75th percentile\n")
-    f.write("   - Applied to both global, winter, and post-monsoon models\n\n")
-    
-    f.write("5. ✓ Residual calibration:\n")
-    f.write("   - Isotonic regression calibration\n")
-    f.write("   - Applied to all model predictions\n\n")
-    
-    f.write("6. ✓ BLH-based lag features:\n")
-    f.write("   - blh_lag_1h\n")
-    f.write("   - blh_rolling_mean_3h\n")
-    f.write("   - blh_no2_lag1_interaction\n\n")
+    f.write("4. RESIDUAL CALIBRATION:\n")
+    f.write("   - Isotonic regression calibrator trained on validation set\n")
+    f.write("   - Applied to test predictions to reduce bias\n")
+    f.write("   - Calibrator saved with model in pickle file\n\n")
     
     f.write("PERFORMANCE:\n")
     f.write("-"*80 + "\n")
-    f.write(f"Global Model RMSE:     {global_metrics['RMSE']:.6f}, R²: {global_metrics['R2']:.6f}\n")
-    f.write(f"Hard Blended RMSE:     {blended_metrics['RMSE']:.6f}, R²: {blended_metrics['R2']:.6f}\n")
-    f.write(f"Soft Blended RMSE:     {soft_blended_metrics['RMSE']:.6f}, R²: {soft_blended_metrics['R2']:.6f}\n")
-    f.write(f"Adaptive Blended RMSE: {adaptive_blended_metrics['RMSE']:.6f}, R²: {adaptive_blended_metrics['R2']:.6f}\n")
-    improvement = ((global_metrics['RMSE'] - soft_blended_metrics['RMSE']) / global_metrics['RMSE'] * 100)
-    adaptive_improvement = ((global_metrics['RMSE'] - adaptive_blended_metrics['RMSE']) / global_metrics['RMSE'] * 100)
-    f.write(f"Soft Blended Improvement: {improvement:.2f}%\n")
-    f.write(f"Adaptive Improvement:    {adaptive_improvement:.2f}%\n\n")
+    f.write(f"Train RMSE: {no2_train_metrics['RMSE']:.6f}, R²: {no2_train_metrics['R2']:.6f}\n")
+    f.write(f"Val RMSE:   {no2_val_metrics['RMSE']:.6f}, R²: {no2_val_metrics['R2']:.6f}\n")
+    f.write(f"Test RMSE:  {no2_test_metrics['RMSE']:.6f}, R²: {no2_test_metrics['R2']:.6f}\n")
+    f.write(f"Baseline RMSE: {no2_baseline:.6f}\n")
+    f.write(f"Improvement: {((no2_baseline - no2_test_metrics['RMSE']) / no2_baseline * 100):.2f}%\n\n")
     
     f.write("MODEL FILES:\n")
     f.write("-"*80 + "\n")
     f.write("O3 Model: models/final_o3_model.txt/.pkl\n")
-    f.write("NO2 Global: models/final_no2_global_model.txt/.pkl\n")
-    f.write("NO2 Winter: models/final_no2_winter_model.txt/.pkl\n")
-    f.write("NO2 Post-Monsoon: models/final_no2_post_monsoon_model.txt/.pkl\n")
-    f.write("(Models include calibrators in pickle files)\n\n")
+    f.write("NO2 Model: models/final_no2_model.txt/.pkl\n")
+    f.write("(Pickle files include both model and calibrator)\n\n")
     
     f.write("="*80 + "\n")
 
