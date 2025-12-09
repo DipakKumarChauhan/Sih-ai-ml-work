@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PredictResponse } from '@shared/api';
 import apiClient from '@/services/apiClient';
-import { generateDummy24HourForecast } from '@/services/dummyData';
 import { RefreshCw, AlertCircle, Upload, CheckCircle } from 'lucide-react';
 import { useTheme } from '@/contexts/ThemeContext';
 import ForecastChart from '@/components/ForecastChart';
@@ -151,12 +150,23 @@ export default function InteractiveForecastTool({
     setError(null);
 
     try {
-      // Use dummy data for now
-      const result = generateDummy24HourForecast(siteId);
+      // Send prediction request to backend API
+      const result = await apiClient.predictSite(siteId, {
+        year: formData.year,
+        month: formData.month,
+        day: formData.day,
+        hour: formData.hour,
+        no2_value: formData.NO2_forecast,
+        o3_value: formData.O3_forecast,
+        temperature: formData.T_forecast,
+        humidity: formData.q_forecast,
+        wind_speed: Math.sqrt(formData.u_forecast ** 2 + formData.v_forecast ** 2),
+      } as any);
+      
       setForecastResult(result);
       onForecastGenerated(result);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to generate forecast';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to generate forecast from backend';
       setError(errorMessage);
       console.error('Error generating forecast:', err);
     } finally {

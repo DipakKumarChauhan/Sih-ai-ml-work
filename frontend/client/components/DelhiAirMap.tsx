@@ -91,17 +91,31 @@ const FitBounds: React.FC<{ sites: SiteReading[] }> = ({ sites }) => {
 
   useEffect(() => {
     if (!map || sites.length === 0) return;
-    
-    // Calculate bounds from all site locations
-    const bounds = L.latLngBounds(
-      sites.map(site => [site.lat, site.lon] as LatLngTuple)
-    );
-    
-    // Fit bounds with padding to ensure all markers are visible
-    map.fitBounds(bounds, {
-      padding: [50, 50], // Add padding so markers aren't at the edge
-      maxZoom: 12, // Limit max zoom to keep overview
+
+    // Defer until map is ready and has size to avoid _leaflet_pos errors
+    const doFit = () => {
+      if (!map || sites.length === 0) return;
+      const size = map.getSize();
+      if (!size || size.x === 0 || size.y === 0) return; // skip if container not laid out yet
+
+      const bounds = L.latLngBounds(
+        sites.map(site => [site.lat, site.lon] as LatLngTuple)
+      );
+
+      map.fitBounds(bounds, {
+        padding: [50, 50],
+        maxZoom: 12,
+      });
+    };
+
+    map.whenReady(() => {
+      // small timeout to ensure layout pass completed
+      setTimeout(doFit, 50);
     });
+
+    return () => {
+      // no cleanup needed
+    };
   }, [map, sites]);
 
   return null;
