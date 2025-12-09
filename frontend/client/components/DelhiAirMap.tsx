@@ -1,16 +1,27 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import L, { LatLngBoundsExpression, LatLngTuple } from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import 'leaflet.heat';
+import React, { lazy, Suspense, useMemo, useState } from 'react';
 import { useTheme } from '@/contexts/ThemeContext';
-import { RefreshCw, MapPin, Flame, Droplets } from 'lucide-react';
+import { RefreshCw, Flame, Droplets } from 'lucide-react';
+import ClientOnlyMap from './ClientOnlyMap';
 
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
-import markerIcon from 'leaflet/dist/images/marker-icon.png';
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+// Define types locally to avoid importing from leaflet
+type LatLngTuple = [number, number];
+type LatLngBoundsExpression = [[number, number], [number, number]];
+
+// Dynamically import the map content component to avoid SSR issues
+// Only import when actually needed (inside ClientOnlyMap wrapper)
+// Use a function to ensure it's only called on client side
+const DelhiAirMapContent = lazy(() => {
+  // Double-check we're on client before importing
+  if (typeof window === 'undefined') {
+    // Return a no-op component for SSR
+    return Promise.resolve({ 
+      default: () => null as any
+    } as any);
+  }
+  return import('./DelhiAirMapContent').then(mod => ({ default: mod.default }));
+});
 
 type Pollutant = 'O3' | 'NO2';
 type Dataset = 'actual' | 'predicted';
@@ -128,6 +139,7 @@ export default function DelhiAirMap({ sites, onRefresh }: DelhiAirMapProps) {
   const data = sites ?? defaultSites;
   
   // Calculate center and bounds dynamically from site locations
+  // These hooks must be called unconditionally (before any early returns)
   const center: LatLngTuple = useMemo(() => {
     if (data.length === 0) return [28.61, 77.21];
     const avgLat = data.reduce((sum, site) => sum + site.lat, 0) / data.length;
@@ -168,139 +180,93 @@ export default function DelhiAirMap({ sites, onRefresh }: DelhiAirMapProps) {
     []
   );
 
-  const tileUrl =
-    theme === 'dark'
-      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  const tileUrl = useMemo(
+    () =>
+      theme === 'dark'
+        ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+        : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    [theme]
+  );
 
   return (
-    <div className={`rounded-xl border ${theme === 'dark' ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200'} overflow-hidden`}>
-      <div className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h3 className={`text-lg font-semibold ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Delhi O₃ & NO₂ Heatmaps</h3>
-          <p className={`text-sm ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>Side-by-side intensity for Delhi sites only</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className={`flex rounded-lg p-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'}`}>
-            {(['actual', 'predicted'] as Dataset[]).map((d) => (
-              <button
-                key={d}
-                onClick={() => setDataset(d)}
-                className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
-                  dataset === d
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : theme === 'dark'
-                    ? 'text-slate-200 hover:bg-slate-700'
-                    : 'text-slate-700 hover:bg-white'
-                }`}
-              >
-                {d === 'actual' ? 'Actual' : 'Predicted'}
-              </button>
-            ))}
+    <ClientOnlyMap>
+      <div className={`rounded-xl border ${theme === 'dark' ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200'} overflow-hidden`}>
+        <div className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h3 className={`text-lg font-semibold ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Delhi O₃ & NO₂ Heatmaps</h3>
+            <p className={`text-sm ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>Side-by-side intensity for Delhi sites only</p>
           </div>
-          {onRefresh && (
-            <button
-              onClick={onRefresh}
-              className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition ${
-                theme === 'dark'
-                  ? 'bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700'
-                  : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-              }`}
-            >
-              <RefreshCw className="w-4 h-4" /> Refresh
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
-        {(['NO2', 'O3'] as Pollutant[]).map((pollutant) => {
-          const range = pollutantRanges[pollutant];
-          const heatPoints = data.map((site) => {
-            const key = `${pollutant}_${dataset}` as keyof SiteReading;
-            const raw = site[key] as number;
-            const clamp = (v: number) => Math.max(range.min, Math.min(range.max, v));
-            const normalized = (clamp(raw) - range.min) / (range.max - range.min || 1);
-            return [site.lat, site.lon, normalized] as [number, number, number];
-          });
-
-          return (
-            <div key={pollutant} className="flex flex-col gap-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {range.icon}
-                  <div>
-                    <p className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>{pollutant === 'O3' ? 'O₃' : 'NO₂'} Heatmap</p>
-                    <p className={`text-xs ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>Delhi focus • {dataset === 'actual' ? 'Actual readings' : 'Model predictions'}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="relative h-[420px] w-full">
-                <MapContainer
-                  {...({
-                    center: center as [number, number],
-                    zoom: 11,
-                    minZoom: 9,
-                    maxZoom: 16,
-                    maxBounds: bounds,
-                    maxBoundsViscosity: 1.0,
-                    scrollWheelZoom: true,
-                    className: 'h-full w-full',
-                  } as any)}
-                >
-                  <TileLayer {...({ attribution: '&copy; OpenStreetMap', url: tileUrl } as any)} />
-                  <FitBounds sites={data} />
-                  <HeatLayer points={heatPoints} gradient={gradient} />
-
-                  {data.map((site) => {
-                    const key = `${pollutant}_${dataset}` as keyof SiteReading;
-                    const value = site[key] as number;
-                    return (
-                      <Marker key={`${pollutant}-${site.id}`} position={[site.lat, site.lon]}>
-                        <Popup>
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2 font-semibold text-slate-800">
-                              <MapPin className="w-4 h-4 text-cyan-600" />
-                              <span>{site.name}</span>
-                            </div>
-                            <div className="text-sm text-slate-600">
-                              <div className="flex items-center gap-2">
-                                {range.icon}
-                                <span>
-                                  {pollutant === 'O3' ? 'O₃' : 'NO₂'} ({dataset}):{' '}
-                                  <span className="font-semibold text-slate-900">{value.toFixed(1)} ppb</span>
-                                </span>
-                              </div>
-                              <div className="text-xs text-slate-500 mt-1">Updated: {new Date(site.updatedAt).toLocaleString()}</div>
-                            </div>
-                          </div>
-                        </Popup>
-                      </Marker>
-                    );
-                  })}
-                </MapContainer>
-
-                <div
-                  className={`absolute right-3 bottom-3 rounded-lg border px-3 py-2 shadow-md ${
-                    theme === 'dark' ? 'bg-slate-900/80 border-slate-700 text-slate-100' : 'bg-white/90 border-slate-200 text-slate-700'
+          <div className="flex flex-wrap items-center gap-2">
+            <div className={`flex rounded-lg p-1 ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-100'}`}>
+              {(['actual', 'predicted'] as Dataset[]).map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDataset(d)}
+                  className={`px-3 py-1.5 text-sm rounded-md font-medium transition ${
+                    dataset === d
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : theme === 'dark'
+                      ? 'text-slate-200 hover:bg-slate-700'
+                      : 'text-slate-700 hover:bg-white'
                   }`}
                 >
-                  <div className="text-xs font-semibold mb-1 flex items-center gap-1" style={{ color: range.color }}>
-                    {range.icon}
-                    <span>{pollutant === 'O3' ? 'O₃' : 'NO₂'} ({dataset})</span>
-                  </div>
+                  {d === 'actual' ? 'Actual' : 'Predicted'}
+                </button>
+              ))}
+            </div>
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                className={`inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                  theme === 'dark'
+                    ? 'bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700'
+                    : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                }`}
+              >
+                <RefreshCw className="w-4 h-4" /> Refresh
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 p-4 lg:grid-cols-2">
+          {(['NO2', 'O3'] as Pollutant[]).map((pollutant) => {
+            const range = pollutantRanges[pollutant];
+
+            return (
+              <div key={pollutant} className="flex flex-col gap-3">
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="h-2 w-32 rounded-full" style={{ background: 'linear-gradient(90deg, #0ea5e9, #22d3ee, #a3e635, #f59e0b, #ef4444)' }} />
-                    <div className="text-[10px] text-slate-500">{range.min}–{range.max} ppb</div>
+                    {range.icon}
+                    <div>
+                      <p className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>{pollutant === 'O3' ? 'O₃' : 'NO₂'} Heatmap</p>
+                      <p className={`text-xs ${theme === 'dark' ? 'text-slate-300' : 'text-slate-600'}`}>Delhi focus • {dataset === 'actual' ? 'Actual readings' : 'Model predictions'}</p>
+                    </div>
                   </div>
                 </div>
+
+                <Suspense fallback={
+                  <div className="relative h-[420px] w-full flex items-center justify-center">
+                    <p className={`text-sm ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>Loading map...</p>
+                  </div>
+                }>
+                  <DelhiAirMapContent
+                    data={data}
+                    pollutant={pollutant}
+                    dataset={dataset}
+                    center={center}
+                    bounds={bounds}
+                    tileUrl={tileUrl}
+                    gradient={gradient}
+                    range={range}
+                  />
+                </Suspense>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </ClientOnlyMap>
   );
 }
 

@@ -273,7 +273,15 @@ export default function Dashboard() {
                   )}
 
                   {/* Delhi Heatmaps */}
-                  <DelhiAirMap />
+                  <Suspense fallback={
+                    <div className={`rounded-xl border p-6 ${theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
+                      <p className={`text-sm ${theme === 'dark' ? 'text-slate-400' : 'text-slate-600'}`}>Loading map...</p>
+                    </div>
+                  }>
+                    <MapErrorBoundary>
+                      <DelhiAirMap onRefresh={() => fetchAllData(selectedSite, timeRange)} />
+                    </MapErrorBoundary>
+                  </Suspense>
 
                   {/* Time Range Selector & Trend Chart */}
                   <div className={`rounded-xl border p-6 ${theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-200'}`}>
@@ -341,7 +349,13 @@ export default function Dashboard() {
                         }}
                         curve="monotoneX"
                         colors={(d: any) => d.color}
-                        lineWidth={((d: any) => d.lineWidth || 2) as any}
+                        lineWidth={((d: any) => {
+                          if (!d || typeof d !== 'object') return 2;
+                          const width = typeof d.lineWidth === 'number' && !isNaN(d.lineWidth) && d.lineWidth > 0 
+                            ? d.lineWidth 
+                            : 2;
+                          return Math.max(1, Math.min(10, width)); // Clamp between 1 and 10
+                        }) as any}
                         // Use original color for points (not grayed out)
                         axisTop={null}
                         axisRight={null}
