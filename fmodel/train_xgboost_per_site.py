@@ -16,6 +16,7 @@ import pandas as pd
 import numpy as np
 import xgboost as xgb
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.impute import SimpleImputer
 import os
 import json
 from datetime import datetime
@@ -31,33 +32,35 @@ N_SITES = 7
 # Features to exclude from training (ONLY targets, keep temporal features)
 EXCLUDE_FEATURES = ['O3_target', 'NO2_target', 'site_id']
 
-# XGBoost hyperparameters - OPTIMIZED
+# XGBoost hyperparameters - OPTIMIZED TO REDUCE OVERFITTING
 XGB_PARAMS = {
     'O3': {
         'objective': 'reg:squarederror',
-        'n_estimators': 300,
-        'max_depth': 5,  # Optimized from 3
-        'learning_rate': 0.1,
-        'subsample': 0.7,
-        'colsample_bytree': 0.7,
-        'min_child_weight': 5,
-        'gamma': 0.3,  # Increased from 0.2
-        'reg_alpha': 0.5,
-        'reg_lambda': 2.0,
+        'n_estimators': 1000,  # Larger + early stopping
+        'max_depth': 4,  # Reduced complexity
+        'learning_rate': 0.05,  # Lower learning rate
+        'subsample': 0.6,
+        'colsample_bytree': 0.6,
+        'min_child_weight': 3,
+        'gamma': 0.2,
+        'reg_alpha': 1.0,  # Stronger L1 regularization
+        'reg_lambda': 3.0,  # Stronger L2 regularization
+        'eval_metric': 'rmse',  # Consistent metric
         'random_state': 42,
         'n_jobs': -1
     },
     'NO2': {
         'objective': 'reg:squarederror',
-        'n_estimators': 300,
-        'max_depth': 5,  # Optimized from 3
-        'learning_rate': 0.1,
-        'subsample': 0.7,
-        'colsample_bytree': 0.7,
-        'min_child_weight': 5,
-        'gamma': 0.3,  # Increased from 0.2
-        'reg_alpha': 0.5,
-        'reg_lambda': 2.0,
+        'n_estimators': 1000,  # Larger + early stopping
+        'max_depth': 4,  # Reduced complexity
+        'learning_rate': 0.05,  # Lower learning rate
+        'subsample': 0.6,
+        'colsample_bytree': 0.6,
+        'min_child_weight': 3,
+        'gamma': 0.2,
+        'reg_alpha': 1.0,  # Stronger L1 regularization
+        'reg_lambda': 3.0,  # Stronger L2 regularization
+        'eval_metric': 'rmse',  # Consistent metric
         'random_state': 42,
         'n_jobs': -1
     }
@@ -105,35 +108,38 @@ def add_lag_features(df):
 
 
 def add_rolling_features(df):
-    """Add rolling window features (STEP 2)."""
+    """Add rolling window features (STEP 2) using ONLY past information (prevent leakage)."""
     df = df.copy()
     
-    # Rolling features for NO2_target
-    if 'NO2_target' in df.columns:
+    # Use lagged targets for rolling means to avoid using current/future targets
+    # Ensure lag1 exists first (add_lag_features runs before this)
+    # NO2 rolling (uses NO2_target_lag1 -> past values only)
+    if 'NO2_target_lag1' in df.columns:
         for window in [3, 6, 12]:
-            df[f'NO2_roll{window}'] = df['NO2_target'].rolling(window=window, min_periods=1).mean()
+            df[f'NO2_roll{window}'] = df['NO2_target_lag1'].rolling(window=window, min_periods=1).mean()
     
-    # Rolling features for O3_target
-    if 'O3_target' in df.columns:
+    # O3 rolling (uses O3_target_lag1 -> past values only)
+    if 'O3_target_lag1' in df.columns:
         for window in [3, 6, 12]:
-            df[f'O3_roll{window}'] = df['O3_target'].rolling(window=window, min_periods=1).mean()
+            df[f'O3_roll{window}'] = df['O3_target_lag1'].rolling(window=window, min_periods=1).mean()
     
-    # Rolling features for temperature (T_forecast)
+    # Rolling features for temperature (T_forecast) – forecasts are “future aware” by definition,
+    # but we still avoid centered windows; use past-only rolling.
     if 'T_forecast' in df.columns:
         for window in [3]:
-            df[f'temp_roll{window}'] = df['T_forecast'].rolling(window=window, min_periods=1).mean()
+            df[f'temp_roll{window}'] = df['T_forecast'].shift(1).rolling(window=window, min_periods=1).mean()
     
     # Rolling features for relative humidity (q_forecast as proxy)
     if 'q_forecast' in df.columns:
         for window in [3]:
-            df[f'rh_roll{window}'] = df['q_forecast'].rolling(window=window, min_periods=1).mean()
+            df[f'rh_roll{window}'] = df['q_forecast'].shift(1).rolling(window=window, min_periods=1).mean()
     
     # Rolling features for wind speed
     if 'wind_speed' in df.columns:
         for window in [3]:
-            df[f'ws_roll{window}'] = df['wind_speed'].rolling(window=window, min_periods=1).mean()
+            df[f'ws_roll{window}'] = df['wind_speed'].shift(1).rolling(window=window, min_periods=1).mean()
     
-    print(f"  Added rolling window features")
+    print(f"  Added rolling window features (past-only, leakage-safe)")
     return df
 
 
@@ -145,8 +151,8 @@ def smooth_satellite_data(df):
     
     for col in satellite_cols:
         if col in df.columns:
-            # Apply rolling mean with window=3, min_periods=1
-            df[f'{col}_smooth'] = df[col].rolling(window=3, min_periods=1, center=True).mean()
+            # Apply rolling mean with window=3, min_periods=1, past-only (no future leakage)
+            df[f'{col}_smooth'] = df[col].rolling(window=3, min_periods=1, center=False).mean().shift(1)
             # Drop the original raw column
             df = df.drop(col, axis=1)
     
@@ -186,6 +192,11 @@ def add_temporal_features(df):
             df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
             df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
         
+        # Check for NaT (invalid datetime) before dropping
+        if df['datetime'].isnull().any():
+            nat_count = df['datetime'].isnull().sum()
+            print(f"  ⚠️  Warning: {nat_count} rows have invalid datetime (NaT)")
+        
         # Drop datetime column (not needed for training)
         df = df.drop('datetime', axis=1)
     
@@ -218,12 +229,11 @@ def prepare_features(df):
     y_o3 = df['O3_target'].copy()
     y_no2 = df['NO2_target'].copy()
     
-    # Handle missing values (lag features will have NaN at the beginning)
-    X = X.fillna(X.median())
+    # NOTE: Do NOT fill missing values here - this causes data leakage!
+    # Missing values will be filled AFTER splitting using train-only statistics
     
-    # Check for infinite values
+    # Check for infinite values and replace with NaN (will be imputed later)
     X = X.replace([np.inf, -np.inf], np.nan)
-    X = X.fillna(X.median())
     
     print(f"  Total features used: {len(feature_cols)}")
     lag_features = [col for col in feature_cols if 'lag' in col or 'roll' in col]
@@ -280,13 +290,9 @@ def split_time_series_by_month(df, X, y_o3, y_no2):
 
 def train_model(X_train, y_train, X_val, y_val, target_name, params):
     """Train XGBoost model for a single target with early stopping and track metrics."""
-    # Early stopping parameters
-    early_stopping_rounds = 30
-    min_rounds = 20
-    
-    # Create base params without n_estimators for incremental training
-    base_params = {k: v for k, v in params.items() if k != 'n_estimators'}
-    max_rounds = params.get('n_estimators', 300)
+    # Early stopping parameters (increased for larger n_estimators)
+    early_stopping_rounds = 50
+    max_rounds = params.get('n_estimators', 1000)
     
     # Lists to store metrics at each iteration
     iterations = []
@@ -295,17 +301,11 @@ def train_model(X_train, y_train, X_val, y_val, target_name, params):
     val_rmse_history = []
     val_r2_history = []
     
-    # Initialize model
-    model = xgb.XGBRegressor(**base_params, n_estimators=min_rounds)
+    # Create model with all parameters
+    model = xgb.XGBRegressor(**params)
     
-    # Manual early stopping: train incrementally and monitor validation loss
-    best_val_rmse = float('inf')
-    best_model = None
-    rounds_without_improvement = 0
-    best_iteration = min_rounds
-    
-    # Train model first (simplified approach)
-    print(f"  Training model and tracking metrics...")
+    # Train model with early stopping (simplified and more robust)
+    print(f"  Training model with early stopping (max {max_rounds} rounds, patience {early_stopping_rounds})...")
     
     try:
         # Try using callbacks for newer XGBoost versions (2.0+)
@@ -313,27 +313,34 @@ def train_model(X_train, y_train, X_val, y_val, target_name, params):
         model.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
+            eval_metric='rmse',
             verbose=False,
             callbacks=callbacks
         )
         best_iteration = getattr(model, 'best_iteration', max_rounds)
     except (AttributeError, TypeError):
-        # Fallback: Manual early stopping
+        # Fallback: Use early_stopping_rounds parameter (XGBoost 1.x)
         try:
-            # Try early_stopping_rounds in fit (XGBoost 1.x)
             model.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
+                eval_metric='rmse',
                 early_stopping_rounds=early_stopping_rounds,
                 verbose=False
             )
             best_iteration = getattr(model, 'best_iteration', max_rounds)
         except TypeError:
-            # Manual early stopping implementation
+            # Final fallback: Manual early stopping
             print(f"  Using manual early stopping (max {max_rounds} rounds, patience {early_stopping_rounds})")
+            best_val_rmse = float('inf')
+            best_model = None
+            rounds_without_improvement = 0
+            best_iteration = max_rounds
+            
+            base_params = {k: v for k, v in params.items() if k != 'n_estimators'}
             
             # Train incrementally
-            for round_num in range(min_rounds, max_rounds + 1, 10):
+            for round_num in range(10, max_rounds + 1, 10):
                 # Update n_estimators
                 temp_model = xgb.XGBRegressor(**base_params, n_estimators=round_num)
                 temp_model.fit(
@@ -436,7 +443,7 @@ def train_model(X_train, y_train, X_val, y_val, target_name, params):
         'val_r2': float(val_r2),
         'best_iteration': best_iteration,
         'training_history': training_history
-    }
+    }, y_val_pred, y_val
 
 
 def get_feature_importance(model, feature_names, top_n=20):
@@ -505,6 +512,12 @@ def plot_training_curves(training_history, site_id, target_name, model_dir, time
     # Also create combined plot with both metrics
     fig, ax = plt.subplots(figsize=(12, 6))
     
+    # Get best iteration
+    best_iteration = None
+    if iterations:
+        best_idx = np.argmin(val_rmse)
+        best_iteration = iterations[best_idx]
+    
     # Plot RMSE (left y-axis)
     ax2_twin = ax.twinx()
     line1 = ax.plot(iterations, train_r2, label='Train R²', linewidth=2, color='blue', alpha=0.7)
@@ -514,13 +527,20 @@ def plot_training_curves(training_history, site_id, target_name, model_dir, time
     line4 = ax2_twin.plot(iterations, val_rmse, label='Val RMSE', linewidth=2, color='red', 
                           linestyle='--', alpha=0.7)
     
+    # Add vertical line at best iteration
+    if best_iteration:
+        line5 = ax.axvline(x=best_iteration, color='green', linestyle='--', linewidth=2, 
+                          label=f'Best Iter ({best_iteration})', alpha=0.7)
+        lines = line1 + line2 + line3 + line4 + [line5]
+    else:
+        lines = line1 + line2 + line3 + line4
+    
     ax.set_xlabel('Iteration', fontsize=12)
     ax.set_ylabel('R²', fontsize=12, color='black')
     ax2_twin.set_ylabel('RMSE', fontsize=12, color='black')
     ax.set_title(f'{target_name} - Training Curves (Site {site_id})', fontsize=14, fontweight='bold')
     
     # Combine legends
-    lines = line1 + line2 + line3 + line4
     labels = [l.get_label() for l in lines]
     ax.legend(lines, labels, loc='center right', fontsize=10)
     
@@ -538,9 +558,36 @@ def plot_training_curves(training_history, site_id, target_name, model_dir, time
     print(f"  Combined curves saved: {plot_path_combined}")
 
 
+def plot_val_scatter(y_true, y_pred, site_id, target_name, model_dir, timestamp):
+    """Plot scatter of predicted vs actual for validation set."""
+    plots_dir = os.path.join(model_dir, f"site_{site_id}", "validation_plots")
+    os.makedirs(plots_dir, exist_ok=True)
+
+    sns.set_style("whitegrid")
+    plt.figure(figsize=(6, 6))
+
+    plt.scatter(y_true, y_pred, alpha=0.6, s=12, color="tab:blue", edgecolor="none")
+    min_val = min(y_true.min(), y_pred.min())
+    max_val = max(y_true.max(), y_pred.max())
+    plt.plot([min_val, max_val], [min_val, max_val], color="red", linestyle="--", linewidth=2, label="Ideal")
+
+    plt.xlabel("Actual", fontsize=12)
+    plt.ylabel("Predicted", fontsize=12)
+    plt.title(f"{target_name} - Validation Scatter (Site {site_id})", fontsize=13, fontweight="bold")
+    plt.legend(fontsize=10)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    plot_path = os.path.join(plots_dir, f"{target_name}_val_scatter_{timestamp}.png")
+    plt.savefig(plot_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  Validation scatter saved: {plot_path}")
+
+
 def save_site_models(site_id, o3_model, no2_model, feature_cols, o3_metrics, no2_metrics, 
                      o3_importance, no2_importance, model_dir, timestamp, 
-                     o3_training_history=None, no2_training_history=None):
+                     o3_training_history=None, no2_training_history=None, imputer=None,
+                     o3_val_pred=None, o3_val_true=None, no2_val_pred=None, no2_val_true=None):
     """Save models and metadata for a site."""
     os.makedirs(model_dir, exist_ok=True)
     site_dir = os.path.join(model_dir, f"site_{site_id}")
@@ -552,6 +599,12 @@ def save_site_models(site_id, o3_model, no2_model, feature_cols, o3_metrics, no2
     
     joblib.dump(o3_model, o3_model_path)
     joblib.dump(no2_model, no2_model_path)
+    
+    # Save imputer if provided (needed for inference)
+    if imputer is not None:
+        imputer_path = os.path.join(site_dir, f"imputer_{timestamp}.pkl")
+        joblib.dump(imputer, imputer_path)
+        print(f"  Imputer saved to: {imputer_path}")
     
     print(f"  Models saved to: {site_dir}")
     
@@ -610,6 +663,12 @@ def save_site_models(site_id, o3_model, no2_model, feature_cols, o3_metrics, no2
     if no2_training_history:
         print(f"  Plotting NO2 training curves...")
         plot_training_curves(no2_training_history, site_id, 'NO2', model_dir, timestamp)
+
+    # Validation scatter plots
+    if o3_val_pred is not None and o3_val_true is not None:
+        plot_val_scatter(o3_val_true, o3_val_pred, site_id, 'O3', model_dir, timestamp)
+    if no2_val_pred is not None and no2_val_true is not None:
+        plot_val_scatter(no2_val_true, no2_val_pred, site_id, 'NO2', model_dir, timestamp)
     
     return site_dir
 
@@ -637,16 +696,40 @@ def train_site_model(site_id, data_dir, model_dir, timestamp):
     print(f"  Test samples: {len(X_test)}")
     print(f"  ✅ Using SAME split for O3 and NO2 targets")
     
+    # ---- CRITICAL FIX: Impute using train-only statistics to avoid data leakage ----
+    print(f"\n  Imputing missing values using train-only statistics (preventing data leakage)...")
+    imputer = SimpleImputer(strategy='median')
+    imputer.fit(X_train)  # Fit ONLY on training data
+    
+    # Transform all splits using train statistics
+    X_train = pd.DataFrame(
+        imputer.transform(X_train), 
+        columns=X_train.columns, 
+        index=X_train.index
+    )
+    X_val = pd.DataFrame(
+        imputer.transform(X_val), 
+        columns=X_val.columns, 
+        index=X_val.index
+    )
+    X_test = pd.DataFrame(
+        imputer.transform(X_test), 
+        columns=X_test.columns, 
+        index=X_test.index
+    )
+    print(f"  ✅ Missing values imputed (train median used for all splits)")
+    # ------------------------------------------------------------
+    
     # Train O3 model
     print(f"\n  Training O3 model...")
-    o3_model, o3_metrics = train_model(
+    o3_model, o3_metrics, o3_val_pred, o3_val_true = train_model(
         X_train, y_o3_train, X_val, y_o3_val, 'O3', XGB_PARAMS['O3']
     )
     o3_training_history = o3_metrics.get('training_history', None)
     
     # Train NO2 model
     print(f"\n  Training NO2 model...")
-    no2_model, no2_metrics = train_model(
+    no2_model, no2_metrics, no2_val_pred, no2_val_true = train_model(
         X_train, y_no2_train, X_val, y_no2_val, 'NO2', XGB_PARAMS['NO2']
     )
     no2_training_history = no2_metrics.get('training_history', None)
@@ -655,13 +738,16 @@ def train_site_model(site_id, data_dir, model_dir, timestamp):
     o3_importance = get_feature_importance(o3_model, feature_cols, top_n=20)
     no2_importance = get_feature_importance(no2_model, feature_cols, top_n=20)
     
-    # Save models
+    # Save models (including imputer for inference)
     site_dir = save_site_models(
         site_id, o3_model, no2_model, feature_cols,
         o3_metrics, no2_metrics, o3_importance, no2_importance,
         model_dir, timestamp,
         o3_training_history=o3_training_history,
-        no2_training_history=no2_training_history
+        no2_training_history=no2_training_history,
+        imputer=imputer,
+        o3_val_pred=o3_val_pred, o3_val_true=y_o3_val,
+        no2_val_pred=no2_val_pred, no2_val_true=y_no2_val
     )
     
     return {
