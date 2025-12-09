@@ -103,18 +103,7 @@ def fill_satellite_data(df):
         df = fill_from_forecast(df, "NO2_forecast", "NO2_satellite", "NO2_satellite_filled")
     if 'HCHO_satellite' in df.columns and 'O3_forecast' in df.columns:
         df = fill_from_forecast(df, "O3_forecast", "HCHO_satellite", "HCHO_satellite_filled")
-    
-    # Step 3: Recompute ratio_satellite
-    def _compute_ratio(row):
-        no2 = row.get("NO2_satellite_filled")
-        hcho = row.get("HCHO_satellite_filled")
-        if pd.isna(no2) or pd.isna(hcho) or no2 == 0:
-            return pd.NA
-        return hcho / no2
-    
-    if 'NO2_satellite_filled' in df.columns and 'HCHO_satellite_filled' in df.columns:
-        df["ratio_satellite"] = df.apply(_compute_ratio, axis=1)
-    
+
     # Drop raw satellite columns (we use filled versions)
     df = df.drop(columns=["NO2_satellite", "HCHO_satellite"], errors="ignore")
     
@@ -145,14 +134,13 @@ def add_derived_features(df):
 
 
 def smooth_satellite_data(df):
-    """Smooth satellite data and drop raw columns."""
-    satellite_cols = ['NO2_satellite_filled', 'HCHO_satellite_filled', 'ratio_satellite']
-    
-    for col in satellite_cols:
+    """Smooth satellite data using exponential smoothing and drop raw columns."""
+    sat_cols = ['NO2_satellite_filled', 'HCHO_satellite_filled']
+    for col in sat_cols:
         if col in df.columns:
-            df[f'{col}_smooth'] = df[col].rolling(window=3, min_periods=1, center=True).mean()
-            df = df.drop(col, axis=1)
-    
+            # ewm smoothing with a short span and one-step lag to avoid peeking ahead
+            df[f'{col}_smooth'] = df[col].ewm(span=6, adjust=False).mean().shift(1)
+            df = df.drop(columns=[col])
     return df
 
 
@@ -209,29 +197,27 @@ def add_lag_features(df, use_forecasts=True):
 
 
 def add_rolling_features(df):
-    """Add rolling window features."""
-    # Rolling features for NO2
+    """Add rolling window features (trimmed to reduce leakage/NaNs)."""
+    # Rolling features for NO2 (keep only roll3)
     if 'NO2_forecast' in df.columns:
-        for window in [3, 6, 12]:
-            df[f'NO2_roll{window}'] = df['NO2_forecast'].rolling(window=window, min_periods=1).mean()
-    
-    # Rolling features for O3
+        df['NO2_roll3'] = df['NO2_forecast'].rolling(window=3, min_periods=1).mean()
+
+    # Rolling features for O3 (keep only roll3)
     if 'O3_forecast' in df.columns:
-        for window in [3, 6, 12]:
-            df[f'O3_roll{window}'] = df['O3_forecast'].rolling(window=window, min_periods=1).mean()
-    
+        df['O3_roll3'] = df['O3_forecast'].rolling(window=3, min_periods=1).mean()
+
     # Rolling features for temperature
     if 'T_forecast' in df.columns:
         df['temp_roll3'] = df['T_forecast'].rolling(window=3, min_periods=1).mean()
-    
+
     # Rolling features for relative humidity
     if 'q_forecast' in df.columns:
         df['rh_roll3'] = df['q_forecast'].rolling(window=3, min_periods=1).mean()
-    
+
     # Rolling features for wind speed
     if 'wind_speed' in df.columns:
         df['ws_roll3'] = df['wind_speed'].rolling(window=3, min_periods=1).mean()
-    
+
     return df
 
 
